@@ -15,12 +15,19 @@ TEST_SIZE = 0.2
 SHOW_LOG = True
 
 class DataMaker:
-    def __init__(self) -> None:
+    def __init__(self, config_path="config.ini", project_path=None) -> None:
         self.logger = Logger(SHOW_LOG)
-        self.config = configparser.ConfigParser()
         self.log = self.logger.get_logger(__name__)
-        self.project_path = os.path.join(os.getcwd(), "data")
+        self.config_path = config_path
+        self.config = configparser.ConfigParser()
+        self.config.read(self.config_path)
+
+        if project_path:
+            self.project_path = project_path
+        else:
+            self.project_path = os.path.join(os.getcwd(), "data")
         os.makedirs(self.project_path, exist_ok=True)
+
         self.data_path = os.path.join(self.project_path, "data.csv")
         self.train_path = [
             os.path.join(self.project_path, "Train_X.npy"),
@@ -53,18 +60,24 @@ class DataMaker:
         self.save_splitted_data(X_test, self.test_path[0])
         self.save_splitted_data(y_test, self.test_path[1])
 
+        rel_train_x = os.path.relpath(self.train_path[0], start=os.getcwd())
+        rel_train_y = os.path.relpath(self.train_path[1], start=os.getcwd())
+        rel_test_x = os.path.relpath(self.test_path[0], start=os.getcwd())
+        rel_test_y = os.path.relpath(self.test_path[1], start=os.getcwd())
+        rel_vectorizer = os.path.relpath(self.vectorizer_path, start=os.getcwd())
+
         with open(self.vectorizer_path, "wb") as vec_file:
             pickle.dump(self.vectorizer, vec_file)
         
         self.config["SPLIT_DATA"] = {
-            "X_train": self.train_path[0],
-            "y_train": self.train_path[1],
-            "X_test": self.test_path[0],
-            "y_test": self.test_path[1],
-            "vectorizer": self.vectorizer_path,
+            "X_train": rel_train_x,
+            "y_train": rel_train_y,
+            "X_test": rel_test_x,
+            "y_test": rel_test_y,
+            "vectorizer": rel_vectorizer,
         }
         self.log.info("Train and test data is ready")
-        with open("config.ini", "w") as configfile:
+        with open(self.config_path, "w") as configfile:
             self.config.write(configfile)
         return all(os.path.isfile(path) for path in self.train_path + self.test_path)
 

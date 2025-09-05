@@ -41,15 +41,16 @@ def parse_args():
 
 class Predictor():
 
-    def __init__(self, args=None) -> None:
+    def __init__(self, config_path="config.ini", args=None) -> None:
         logger = Logger(SHOW_LOG)
+        self.config_path = config_path
         self.config = configparser.ConfigParser()
         self.log = logger.get_logger(__name__)
-        self.config.read("config.ini")
-        self.args = args
+        self.config.read(config_path)
+        self.args = args if args is not None else argparse.Namespace(tests="smoke")
         self.log.info("Predictor is ready")
         try:
-            self.X_test = np.load(self.config["SPLIT_DATA"]["x_test"])
+            self.X_test = np.load(self.config["SPLIT_DATA"]["X_test"])
             self.y_test = np.load(self.config["SPLIT_DATA"]["y_test"])
         except FileNotFoundError:    
             self.log.error("File missing.")
@@ -58,8 +59,10 @@ class Predictor():
             self.log.error(f"Numpy array load failure: {e}")
             raise HTTPException(status_code=500, detail="Numpy array load failure")
         try:
-            self.classifier = pickle.load(open(self.config["NAIVE_BAYES"]["path"], "rb"))
-            self.vectorizer = pickle.load(open(self.config["SPLIT_DATA"]["vectorizer"], "rb"))
+            with open(self.config["NAIVE_BAYES"]["path"], "rb") as model_file:
+                self.classifier = pickle.load(model_file)
+            with open(self.config["SPLIT_DATA"]["vectorizer"], "rb") as vectorizer_file:
+                self.vectorizer = pickle.load(vectorizer_file)
         except FileNotFoundError:
             self.log.error("Model file not found.")
             raise HTTPException(status_code=404, detail="Model not found")
@@ -77,7 +80,7 @@ class Predictor():
                     detail="Message is not provided. Please provide a message to analyze."
                 )
             cleaned_message = clean_text(message)  
-            message_vectorized = self.vectorizer.transform([cleaned_message]).toarray()  
+            message_vectorized = self.vectorizer.transform([cleaned_message])  
             sentiment = self.classifier.predict(message_vectorized)
             if sentiment[0] == 1:
                 self.log.info(f"Sentiment for message: '{message}' is Positive")
@@ -109,8 +112,10 @@ class Predictor():
         
     def smoke_test(self):
         try:
-            score = self.classifier.score(self.X_test, self.y_test)
-            self.log.info(f'Model has {score} score')
+            print(self.y_test.shape, self.X_test.shape)
+            y_pred = self.classifier.predict(self.X_test)
+            accuracy = accuracy_score(self.y_test, y_pred)
+            self.log.info(f'Model has {accuracy} Accuracy score')
         except Exception:
             self.log.error(traceback.format_exc())
             sys.exit(1)
@@ -118,45 +123,61 @@ class Predictor():
 
     def func_test(self):
         try:
-            tests_path = os.path.join(os.getcwd(), "tests")
+            tests_path = os.path.join(os.getcwd(), "tests", "test_data")
             exp_path = os.path.join(os.getcwd(), "experiments")
+            os.makedirs(exp_path, exist_ok=True)
 
-            for test in os.listdir(tests_path):
+            for test_file in os.listdir(tests_path):
                 try:
-                    with open(os.path.join(tests_path, test)) as f:
+                    test_path = os.path.join(tests_path, test_file)
+                    with open(test_path) as f:
                         data = json.load(f)
-                        X_dict = data["X"][0]
-                        y_dict = data["y"][0]
+                    
+                    X_list = data.get("X")
+                    y_list = data.get("y")
 
-                        X_text = [X_dict[key] for key in sorted(X_dict.keys(), key=int)]
-                        y = [y_dict[key] for key in sorted(y_dict.keys(), key=int)]
+                    if not X_list or not y_list:
+                        self.log.error(f"Test file {test_file} missing 'X' or 'y'")
+                        continue
 
-                        cleaned_X = [clean_text(text) for text in X_text]
-                        X_vectorized = self.vectorizer.transform(cleaned_X).toarray()
-                        score = self.classifier.score(X_vectorized, y)
+                    # Extract from the first dictionary
+                    X_dict = X_list[0]
+                    y_dict = y_list[0]
 
-                        y_pred = self.classifier.predict(X_vectorized)
-                        accuracy = accuracy_score(y, y_pred)
-                        report = classification_report(y, y_pred)
+                    # Sort keys to maintain order
+                    X_text = [X_dict[key] for key in sorted(X_dict.keys(), key=int)]
+                    y = [y_dict[key] for key in sorted(y_dict.keys(), key=int)]
 
-                        exp_data = {
-                            "score": str(score),
-                            "model_path": self.config["NAIVE_BAYES"]["path"],
-                            "test_path": test,
-                            "accuracy": accuracy,
-                            "classification_report": report,
-                        }
+                    cleaned_X = [clean_text(text) for text in X_text]
+                    X_vectorized = self.vectorizer.transform(cleaned_X).toarray()
 
-                        date_time = datetime.fromtimestamp(time.time())
-                        str_date_time = date_time.strftime("%Y_%m_%d_%H_%M_%S")
-                        exp_dir = os.path.join(exp_path, f'exp_{test[:6]}_{str_date_time}')
-                        os.mkdir(exp_dir)
+                    score = self.classifier.score(X_vectorized, y)
+                    y_pred = self.classifier.predict(X_vectorized)
+                    accuracy = accuracy_score(y, y_pred)
+                    report = classification_report(y, y_pred)
 
-                        with open(os.path.join(exp_dir, "exp_config.yaml"), 'w') as exp_f:
-                            yaml.safe_dump(exp_data, exp_f, sort_keys=False)
-                        shutil.copy(os.path.join(os.getcwd(), "logfile.log"), os.path.join(exp_dir, "exp_logfile.log"))
+                    exp_data = {
+                        "score": str(score),
+                        "model_path": self.config["NAIVE_BAYES"]["path"],
+                        "test_path": test_file,
+                        "accuracy": accuracy,
+                        "classification_report": report,
+                    }
 
-                        self.log.info(f'Model passed func test {f.name}')
+                    date_time = datetime.fromtimestamp(time.time())
+                    str_date_time = date_time.strftime("%Y_%m_%d_%H_%M_%S")
+                    exp_dir = os.path.join(exp_path, f'exp_{test_file[:6]}_{str_date_time}')
+                    os.makedirs(exp_dir, exist_ok=True)
+
+                    with open(os.path.join(exp_dir, "exp_config.yaml"), 'w') as exp_f:
+                        yaml.safe_dump(exp_data, exp_f, sort_keys=False)
+
+                    # Copy log file if exists
+                    log_file = os.path.join(os.getcwd(), "logfile.log")
+                    if os.path.exists(log_file):
+                        shutil.copy(log_file, os.path.join(exp_dir, "exp_logfile.log"))
+
+                    self.log.info(f'Model passed func test {test_file}')
 
                 except Exception:
                     self.log.error(traceback.format_exc())
@@ -170,5 +191,5 @@ class Predictor():
 
 if __name__ == "__main__":
     args = parse_args()
-    predictor = Predictor(args)
+    predictor = Predictor(args=args, config_path="config.ini")
     predictor.test()
